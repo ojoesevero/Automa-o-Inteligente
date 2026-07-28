@@ -59,6 +59,10 @@ if arquivo:
         elif 'CONV' in col: novas_colunas[col] = 'CONVENIO'
         
     df = df.rename(columns=novas_colunas)  
+
+    # NOVA LINHA: Remove colunas duplicadas (mantém apenas a primeira encontrada)
+    df = df.loc[:, ~df.columns.duplicated()]
+    
     # Aplica a Inteligência (Gera a coluna GRUPO_CLIENTE)
     df['GRUPO_CLIENTE'] = df['RAZAOSOCIAL'].apply(classificar_cliente_inteligente)
     
