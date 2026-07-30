@@ -3,64 +3,51 @@ import pandas as pd
 import io
 import numpy as np
 import pdfplumber
-from thefuzz import process
 
 # Configuração da página
 st.set_page_config(page_title="Portal Financeiro - Saavedra", page_icon="📊", layout="wide")
 
 # --- 1. INTELIGÊNCIA DE AGRUPAMENTO E REGRAS ---
-GRUPOS_MESTRES = [
-    'UNIMED', 'CONCEICAO', 'PUC', 'SANTA CASA', 
-    'EBSERH', 'HCAA', 'H DIVINA', 'SMS POA'
-]
-
-def classificar_cliente_inteligente(razao_social):
-    razao = str(razao_social).upper()
-    melhor_match, pontuacao = process.extractOne(razao, GRUPOS_MESTRES)
-    if pontuacao >= 80:
-        return melhor_match
-    return razao.strip()
+# Usamos palavras-chave e CNPJs para precisão absoluta
+def agrupar_cliente(texto, fallback=None):
+    r = str(texto).upper()
+    if 'UNIMED' in r or '87096616' in r: return 'UNIMED'
+    if 'CONCEICAO' in r or 'CONCEIÇÃO' in r: return 'CONCEICAO'
+    if 'UNIAO BRASILEIRA' in r or 'PUC' in r or '88630413' in r: return 'PUC'
+    if 'SANTA CASA' in r: return 'SANTA CASA'
+    if 'EBSERH' in r or 'SERVICOS HOSPITALARES' in r or '15126437' in r: return 'EBSERH'
+    if 'ASTROGILDO' in r or '95610887' in r: return 'HCAA'
+    if 'DIVINA' in r or '87317764' in r: return 'H DIVINA'
+    if 'PORTO ALEGRE' in r and ('PREF' in r or 'MUNICIPIO' in r or '92963560' in r): return 'SMS POA'
+    if 'CLINICAS' in r or '87020517' in r: return 'HCPA'
+    if 'GHC' in r or '450166419' in r: return 'GHC'
+    return fallback if fallback is not None else r.strip()
 
 def extrair_precos_pdf(arquivos_pdf):
     dados_precos = []
     for arquivo in arquivos_pdf:
         with pdfplumber.open(arquivo) as pdf:
-            # Identifica o cliente pelo texto da primeira página
+            # 1. Identifica o cliente lendo CNPJ e Cabeçalho da página 1
             texto_pag1 = pdf.pages[0].extract_text().upper()
-            grupo_cliente, pontuacao = process.extractOne(texto_pag1, GRUPOS_MESTRES)
+            grupo_cliente = agrupar_cliente(texto_pag1, fallback="REVISAR")
             
-            # Se a similaridade for baixa, marcamos para revisão
-            if pontuacao < 70:
-                grupo_cliente = "REVISAR"
-                
-            # Extrai as tabelas de todas as páginas
+            # 2. Extrai as tabelas das páginas
             for page in pdf.pages:
                 tabelas = page.extract_tables()
                 for tabela in tabelas:
                     for linha in tabela:
-                        # Ignora linhas vazias ou muito curtas
-                        if not linha or len(linha) < 6: continue
+                        if not linha or len(linha) < 4: continue
                         
                         celulas = [str(c).strip() if c else "" for c in linha]
                         ref_prod = celulas[0].replace('.', '').replace('-', '') 
                         
-                        # Se a primeira coluna for um código (só números)
-                        if ref_prod.isdigit() and len(ref_prod) > 4:
-                            preco_str = ""
-                            # O Preço Unitário costuma estar na coluna 6 ou 5 e contém "R$"
-                            if len(celulas) > 6 and "R$" in celulas[6]:
-                                preco_str = celulas[6]
-                            elif "R$" in celulas[5]:
-                                preco_str = celulas[5]
-                            else:
-                                # Varre a linha de trás pra frente buscando um valor monetário
-                                for c in reversed(celulas):
-                                    if "R$" in c:
-                                        preco_str = c
-                                        break
+                        # isalnum() aceita letras e números (VPPCSPCE, 900013B01, 7655405)
+                        if ref_prod.isalnum() and len(ref_prod) >= 5:
+                            
+                            # Varre as colunas e pega a primeira que tiver "R$"
+                            preco_str = next((c for c in celulas if "R$" in c), "")
                                         
                             if preco_str:
-                                # Limpa o R$, separadores de milhar e converte para float
                                 valor_limpo = preco_str.replace("R$", "").replace(".", "").replace(",", ".").strip()
                                 try:
                                     dados_precos.append({
@@ -70,7 +57,6 @@ def extrair_precos_pdf(arquivos_pdf):
                                     })
                                 except ValueError:
                                     pass
-                                    
     return pd.DataFrame(dados_precos)
 
 # --- 2. INTERFACE E UPLOADS ---
@@ -84,7 +70,7 @@ with col2:
     arquivos_pdf = st.file_uploader("2º Contratos e Propostas BD (PDF)", type=['pdf'], accept_multiple_files=True)
 
 if arquivo_excel:
-    st.info("🔄 Processando dados...")
+    st.info("🔄 Processando dados da planilha...")
     
     # Leitura dinâmica: procura a linha do cabeçalho
     df_temp = pd.read_excel(arquivo_excel, nrows=20, header=None)
@@ -114,7 +100,8 @@ if arquivo_excel:
     if 'REFPROD' in df.columns:
         df['REFPROD'] = df['REFPROD'].astype(str).str.replace(r'\.0$', '', regex=True)
 
-    df['GRUPO_CLIENTE'] = df['RAZAOSOCIAL'].apply(classificar_cliente_inteligente)
+    # APLICA A NOVA FUNÇÃO AQUI
+    df['GRUPO_CLIENTE'] = df['RAZAOSOCIAL'].apply(lambda x: agrupar_cliente(x))
     
     # --- PROCESSAMENTO DOS PDFs ---
     if arquivos_pdf:
@@ -177,7 +164,7 @@ if arquivo_excel:
             worksheet_resumo.set_column('E:E', 20, formato_moeda)
             
             if 'VALOR_TABELADO_BD' in resumo_df.columns:
-                worksheet_resumo.set_column('F:F', 20, formato_destaque_bd) # Destaca a coluna do PDF
+                worksheet_resumo.set_column('F:F', 20, formato_destaque_bd)
                 worksheet_resumo.set_column('G:G', 15, formato_moeda)
             else:
                 worksheet_resumo.set_column('F:F', 15, formato_moeda)
