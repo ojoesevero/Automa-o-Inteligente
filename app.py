@@ -8,7 +8,6 @@ import pdfplumber
 st.set_page_config(page_title="Portal Financeiro - Saavedra", page_icon="📊", layout="wide")
 
 # --- 1. INTELIGÊNCIA DE AGRUPAMENTO E REGRAS ---
-# Usamos palavras-chave e CNPJs para precisão absoluta
 def agrupar_cliente(texto, fallback=None):
     r = str(texto).upper()
     if 'UNIMED' in r or '87096616' in r: return 'UNIMED'
@@ -27,11 +26,9 @@ def extrair_precos_pdf(arquivos_pdf):
     dados_precos = []
     for arquivo in arquivos_pdf:
         with pdfplumber.open(arquivo) as pdf:
-            # 1. Identifica o cliente lendo CNPJ e Cabeçalho da página 1
             texto_pag1 = pdf.pages[0].extract_text().upper()
             grupo_cliente = agrupar_cliente(texto_pag1, fallback="REVISAR")
             
-            # 2. Extrai as tabelas das páginas
             for page in pdf.pages:
                 tabelas = page.extract_tables()
                 for tabela in tabelas:
@@ -41,12 +38,8 @@ def extrair_precos_pdf(arquivos_pdf):
                         celulas = [str(c).strip() if c else "" for c in linha]
                         ref_prod = celulas[0].replace('.', '').replace('-', '') 
                         
-                        # isalnum() aceita letras e números (VPPCSPCE, 900013B01, 7655405)
                         if ref_prod.isalnum() and len(ref_prod) >= 5:
-                            
-                            # Varre as colunas e pega a primeira que tiver "R$"
                             preco_str = next((c for c in celulas if "R$" in c), "")
-                                        
                             if preco_str:
                                 valor_limpo = preco_str.replace("R$", "").replace(".", "").replace(",", ".").strip()
                                 try:
@@ -69,63 +62,86 @@ with col1:
 with col2:
     arquivos_pdf = st.file_uploader("2º Contratos e Propostas BD (PDF)", type=['pdf'], accept_multiple_files=True)
 
+# Se o usuário subiu pelo menos o Excel, começamos o processamento
 if arquivo_excel:
-    st.info("🔄 Processando dados da planilha...")
     
-    # Leitura dinâmica: procura a linha do cabeçalho
-    df_temp = pd.read_excel(arquivo_excel, nrows=20, header=None)
-    linha_cabecalho = 0
-    for i, row in df_temp.iterrows():
-        linha_texto = "".join(str(val).upper() for val in row.values)
-        if "RAZAOSOCIAL" in linha_texto or "CONVENIO" in linha_texto:
-            linha_cabecalho = i
-            break
+    # 🔄 MENSAGEM DE LOADING ENQUANTO PROCESSA
+    with st.spinner('Lendo e cruzando os dados... Isso pode levar alguns segundos.'):
+        
+        # Lê o Excel
+        df_temp = pd.read_excel(arquivo_excel, nrows=20, header=None)
+        linha_cabecalho = 0
+        for i, row in df_temp.iterrows():
+            linha_texto = "".join(str(val).upper() for val in row.values)
+            if "RAZAOSOCIAL" in linha_texto or "CONVENIO" in linha_texto:
+                linha_cabecalho = i
+                break
+                
+        df = pd.read_excel(arquivo_excel, header=linha_cabecalho)
+        df.columns = df.columns.str.upper().str.strip()
+        
+        novas_colunas = {}
+        for col in df.columns:
+            if 'REF' in col and 'PROD' in col: novas_colunas[col] = 'REFPROD'
+            elif 'DESC' in col: novas_colunas[col] = 'DESCRICAO'
+            elif 'QTD' in col: novas_colunas[col] = 'QTDCOM'
+            elif 'VLR' in col or 'VALOR' in col: novas_colunas[col] = 'VLRTOTAL'
+            elif 'RAZ' in col and 'SOC' in col: novas_colunas[col] = 'RAZAOSOCIAL'
+            elif 'CONV' in col: novas_colunas[col] = 'CONVENIO'
             
-    df = pd.read_excel(arquivo_excel, header=linha_cabecalho)
-    df.columns = df.columns.str.upper().str.strip()
-    
-    novas_colunas = {}
-    for col in df.columns:
-        if 'REF' in col and 'PROD' in col: novas_colunas[col] = 'REFPROD'
-        elif 'DESC' in col: novas_colunas[col] = 'DESCRICAO'
-        elif 'QTD' in col: novas_colunas[col] = 'QTDCOM'
-        elif 'VLR' in col or 'VALOR' in col: novas_colunas[col] = 'VLRTOTAL'
-        elif 'RAZ' in col and 'SOC' in col: novas_colunas[col] = 'RAZAOSOCIAL'
-        elif 'CONV' in col: novas_colunas[col] = 'CONVENIO'
+        df = df.rename(columns=novas_colunas)  
+        df = df.loc[:, ~df.columns.duplicated()]
         
-    df = df.rename(columns=novas_colunas)  
-    df = df.loc[:, ~df.columns.duplicated()]
-    
-    # Converte REFPROD para string garantindo o match correto
-    if 'REFPROD' in df.columns:
-        df['REFPROD'] = df['REFPROD'].astype(str).str.replace(r'\.0$', '', regex=True)
+        if 'REFPROD' in df.columns:
+            df['REFPROD'] = df['REFPROD'].astype(str).str.replace(r'\.0$', '', regex=True)
 
-    # APLICA A NOVA FUNÇÃO AQUI
-    df['GRUPO_CLIENTE'] = df['RAZAOSOCIAL'].apply(lambda x: agrupar_cliente(x))
-    
-    # --- PROCESSAMENTO DOS PDFs ---
-    if arquivos_pdf:
-        st.success(f"📄 {len(arquivos_pdf)} arquivo(s) PDF detectado(s). Lendo tabelas de preço...")
-        df_precos = extrair_precos_pdf(arquivos_pdf)
+        df['GRUPO_CLIENTE'] = df['RAZAOSOCIAL'].apply(lambda x: agrupar_cliente(x))
         
-        if not df_precos.empty:
-            # Remove duplicatas caso o mesmo PDF seja lido duas vezes
-            df_precos = df_precos.drop_duplicates(subset=['GRUPO_CLIENTE', 'REFPROD'])
-            # O "PROCV" do Pandas: junta as vendas com os preços
-            df = pd.merge(df, df_precos, on=['GRUPO_CLIENTE', 'REFPROD'], how='left')
-        else:
-            st.warning("⚠️ Não foi possível extrair preços legíveis dos PDFs enviados.")
+        # Lê os PDFs e mescla
+        if arquivos_pdf:
+            df_precos = extrair_precos_pdf(arquivos_pdf)
+            if not df_precos.empty:
+                df_precos = df_precos.drop_duplicates(subset=['GRUPO_CLIENTE', 'REFPROD'])
+                df = pd.merge(df, df_precos, on=['GRUPO_CLIENTE', 'REFPROD'], how='left')
+
+        # --- PREPARAÇÃO DA PRÉVIA ---
+        grupos_unicos = sorted(df['GRUPO_CLIENTE'].dropna().unique().tolist())
     
-    # --- 3. SELEÇÃO DE CLIENTES ---
+    # ✅ MENSAGEM DE SUCESSO AO TERMINAR
+    st.toast('Processamento concluído!', icon='✅')
+    st.success("Tudo lido com sucesso! Selecione as abas e confira a prévia abaixo.")
+
     st.divider()
-    grupos_unicos = sorted(df['GRUPO_CLIENTE'].dropna().unique().tolist())
-    st.subheader("3º Quais grupos terão aba própria?")
     
-    clientes_selecionados = st.multiselect("Selecione os clientes:", grupos_unicos, default=grupos_unicos)
+    # --- 3. SELEÇÃO E PRÉVIA ---
+    st.subheader("3º Quais grupos terão aba própria?")
+    clientes_selecionados = st.multiselect("Selecione os clientes (ou deixe todos):", grupos_unicos, default=grupos_unicos)
 
-    # --- 4. EXPORTAÇÃO ---
-    if st.button("GERAR RELATÓRIO FINAL 📥", type="primary") and clientes_selecionados:
+    if clientes_selecionados:
         
+        # Cálculos para a aba Resumo
+        df_normal = df[~df['GRUPO_CLIENTE'].isin(clientes_selecionados)]
+        abas_para_criar = clientes_selecionados.copy()
+        if not df_normal.empty:
+            abas_para_criar.append('NORMAL')
+            
+        agg_dict = {'QTDCOM': 'sum', 'VLRTOTAL': 'sum'}
+        if 'VALOR_TABELADO_BD' in df.columns:
+            agg_dict['VALOR_TABELADO_BD'] = 'first'
+            
+        resumo_df = df.groupby(['GRUPO_CLIENTE', 'REFPROD', 'DESCRICAO']).agg(agg_dict).reset_index()
+        resumo_df['VLR UNIT CALCULADO'] = np.where(resumo_df['QTDCOM'] > 0, resumo_df['VLRTOTAL'] / resumo_df['QTDCOM'], 0)
+        
+        if 'VALOR_TABELADO_BD' in resumo_df.columns:
+            cols = ['GRUPO_CLIENTE', 'REFPROD', 'DESCRICAO', 'QTDCOM', 'VLR UNIT CALCULADO', 'VALOR_TABELADO_BD', 'VLRTOTAL']
+            resumo_df = resumo_df[cols]
+        
+        # 👁️ EXIBE A PRÉVIA VISUAL
+        st.subheader("👁️ Prévia do Relatório (Aba RESUMO)")
+        st.dataframe(resumo_df, use_container_width=True, hide_index=True)
+        
+        # --- 4. GERAÇÃO DO ARQUIVO PARA DOWNLOAD ---
+        # Como já calculamos tudo, apenas montamos o Excel na memória escondido
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             workbook = writer.book
@@ -134,29 +150,9 @@ if arquivo_excel:
             formato_cabecalho = workbook.add_format({'bold': True, 'bg_color': '#333333', 'font_color': 'white'})
             formato_destaque_bd = workbook.add_format({'bold': True, 'bg_color': '#E2EFDA', 'font_color': '#375623', 'num_format': 'R$ #,##0.00'})
             
-            df_normal = df[~df['GRUPO_CLIENTE'].isin(clientes_selecionados)]
-            abas_para_criar = clientes_selecionados.copy()
-            if not df_normal.empty:
-                abas_para_criar.append('NORMAL')
-            
-            # Aba RESUMO
-            # Define o que vamos agregar
-            agg_dict = {'QTDCOM': 'sum', 'VLRTOTAL': 'sum'}
-            if 'VALOR_TABELADO_BD' in df.columns:
-                agg_dict['VALOR_TABELADO_BD'] = 'first' # Traz o valor lido no PDF
-                
-            resumo_df = df.groupby(['GRUPO_CLIENTE', 'REFPROD', 'DESCRICAO']).agg(agg_dict).reset_index()
-            resumo_df['VLR UNIT CALCULADO'] = np.where(resumo_df['QTDCOM'] > 0, resumo_df['VLRTOTAL'] / resumo_df['QTDCOM'], 0)
-            
-            # Reorganiza colunas para ficar visualmente lógico
-            if 'VALOR_TABELADO_BD' in resumo_df.columns:
-                cols = ['GRUPO_CLIENTE', 'REFPROD', 'DESCRICAO', 'QTDCOM', 'VLR UNIT CALCULADO', 'VALOR_TABELADO_BD', 'VLRTOTAL']
-                resumo_df = resumo_df[cols]
-            
             resumo_df.to_excel(writer, sheet_name='RESUMO', index=False)
             worksheet_resumo = writer.sheets['RESUMO']
             
-            # Aplica larguras e formatos
             worksheet_resumo.set_column('A:A', 25)
             worksheet_resumo.set_column('B:B', 15)
             worksheet_resumo.set_column('C:C', 40)
@@ -172,7 +168,6 @@ if arquivo_excel:
             for col_num, value in enumerate(resumo_df.columns.values):
                 worksheet_resumo.write(0, col_num, value, formato_cabecalho)
             
-            # Abas INDIVIDUAIS
             for cli in abas_para_criar:
                 nome_aba = str(cli)[:31].replace(':', '').replace('/', '') 
                 df_cli = df_normal if cli == 'NORMAL' else df[df['GRUPO_CLIENTE'] == cli]
@@ -182,11 +177,12 @@ if arquivo_excel:
                 for col_num, value in enumerate(df_cli.columns.values):
                     worksheet_cli.write(0, col_num, value, formato_cabecalho)
         
-        st.balloons()
-        st.success("Tudo pronto! Seu relatório foi processado.")
+        st.divider()
+        # O botão agora apenas serve o arquivo que já foi gerado
         st.download_button(
-            label="📄 Baixar Planilha Consolidada",
+            label="📥 Baixar Planilha Consolidada",
             data=output.getvalue(),
             file_name="PROCESSADO_Relatorio_Final.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary"
         )
