@@ -4,7 +4,7 @@ import io
 import numpy as np
 import pdfplumber
 
-st.set_page_config(page_title="Portal Financeiro - Saavedra", page_icon="📊", layout="wide")
+st.set_page_config(page_title="The Nehemizer - Portal Financeiro Saavedra", page_icon="🎸", layout="wide")
 
 # --- REGRAS E MAPEAMENTO ---
 CONTRATOS_MAPPING = {
@@ -61,7 +61,8 @@ def extrair_precos_pdf(arquivos_pdf):
     return pd.DataFrame(dados_precos)
 
 # --- INTERFACE ---
-st.title("📊 Automação Inteligente Saavedra N3")
+st.title("🎸 The Nehemizer - Automação Inteligente Saavedra N3")
+st.markdown("*“O peso justo e a organização perfeita para os seus contratos financeiros.”*")
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -72,7 +73,7 @@ with col3:
     arquivo_normal = st.file_uploader("3º Tabela Preços Normal", type=['xlsx', 'xls', 'csv'])
 
 if arquivo_excel:
-    with st.spinner('Lendo e aplicando regras de negócio...'):
+    with st.spinner('The Nehemizer está processando e equalizando os dados...'):
         
         # 1. LEITURA VENDAS
         df_temp = pd.read_excel(arquivo_excel, nrows=20, header=None)
@@ -151,7 +152,7 @@ if arquivo_excel:
         # O preço final puxa da BD, se for vazio puxa do Upload Normal
         df['PRECO_COMPRA_FINAL'] = df['VALOR_TABELADO_BD'].fillna(df['PRECO_NORMAL'])
 
-    st.toast('Processamento concluído!', icon='✅')
+    st.toast('Processamento concluído com sucesso!', icon='✅')
     st.divider()
 
     # --- PRÉVIA EDITÁVEL ---
@@ -216,7 +217,6 @@ if arquivo_excel:
             df_resumo_export = df_resumo_export.sort_values(by=['ABA_DESTINO', 'GRUPO_CLIENTE', 'REFPROD'])
             linhas_resumo = []
             
-            # Cria os blocos de subtotal agrupados pelo destino
             for destino, group in df_resumo_export.groupby('ABA_DESTINO', sort=False):
                 subtotal_venda = 0
                 subtotal_compra = 0
@@ -240,7 +240,6 @@ if arquivo_excel:
                     subtotal_venda += row['VLRTOTAL']
                     subtotal_compra += vlr_total_compra
                 
-                # Linha de subtotal
                 linhas_resumo.append([
                     '', '', f'TOTAL ACUMULADO {destino}', '', '', '', '', subtotal_venda, '', subtotal_compra if subtotal_compra > 0 else None
                 ])
@@ -259,7 +258,6 @@ if arquivo_excel:
             for col_num, value in enumerate(df_excel_resumo.columns.values):
                 ws_resumo.write(0, col_num, value, formato_cabecalho)
             
-            # Negrito para os Totais Acumulados
             for row_num, row_data in enumerate(linhas_resumo):
                 if 'TOTAL ACUMULADO' in str(row_data[2]):
                     ws_resumo.set_row(row_num + 1, None, formato_subtotal)
@@ -272,7 +270,6 @@ if arquivo_excel:
                 
                 colunas_aba = []
                 for _, r in df_aba.iterrows():
-                    # Mantém colunas estritas da versão anterior
                     contrato_str = str(r.get('CONTRATO_ORIGINAL', ''))
                     cnpj_p = r.get('CNPJPARCEIRO', '')
                     uf = r.get('UF', '')
@@ -296,7 +293,6 @@ if arquivo_excel:
                 for col_num, value in enumerate(df_excel_aba.columns.values):
                     ws_aba.write(0, col_num, value, formato_cabecalho_aba)
                 
-                # Gera o bloco de resumo de subtotais no final de cada aba
                 start_r = len(df_excel_aba) + 4
                 ws_aba.write_row(start_r - 1, 0, ['Ref Prod', 'Descrição', 'Qtd Com', 'VLR UNIT VENDA', 'VLR TOTAL VENDA'], formato_subtotal)
                 
@@ -314,7 +310,7 @@ if arquivo_excel:
         st.download_button(
             label="📄 Baixar Planilha Consolidada",
             data=output.getvalue(),
-            file_name="PROCESSADO_Relatorio_Final_Definitivo.xlsx",
+            file_name="PROCESSADO_Relatorio_Final_TheNehemizer.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
